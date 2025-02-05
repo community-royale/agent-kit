@@ -130,6 +130,7 @@ dist
 .pnp.*
 
 *.lock
+bun.lockb
 codebase.md
 *.aider
 package-lock.json
