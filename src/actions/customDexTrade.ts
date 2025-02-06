@@ -3,9 +3,9 @@ import { z } from "zod";
 import { ActionProvider, CreateAction, EvmWalletProvider } from "@coinbase/agentkit";
 import type { Network } from "@coinbase/agentkit";
 import { Token, CurrencyAmount, TradeType, Percent } from "@uniswap/sdk-core";
-import { AlphaRouter, SwapType, SwapOptionsSwapRouter02 } from '@uniswap/smart-order-router';
+import { AlphaRouter, SwapType, SwapOptionsUniversalRouter } from '@uniswap/smart-order-router';
+import { UniversalRouterVersion } from '@uniswap/universal-router-sdk';
 import { providers } from 'ethers';
-import { baseSepolia } from 'viem/chains';
 import JSBI from 'jsbi';
 
 // Schema matches the original CDP trade interface
@@ -20,10 +20,17 @@ export const TestnetTradeSchema = z
   .strip()
   .describe("Instructions for trading assets on Base Sepolia testnet");
 
-// Constants
-const CHAIN_ID = baseSepolia.id;
-const V3_SWAP_ROUTER_ADDRESS = "0x4648a43B2C14Da09FdF82B161150d3F634f40491" as const;
-const BASE_SEPOLIA_RPC = baseSepolia.rpcUrls.default.http[0];
+// Base Sepolia Contract Addresses
+const CHAIN_ID = 84532;
+const BASE_SEPOLIA_CONTRACTS = {
+    UNIVERSAL_ROUTER: "0x050E797f3625EC8785265e1d9BDd4799b97528A1" as const,
+    V3_FACTORY: "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24" as const,
+    QUOTER_V2: "0xC5290058841028F1614F3A6F0F5816cAd0df5E27" as const,
+    PERMIT2: "0x000000000022d473030f116ddee9f6b43ac78ba3" as const,
+    WETH9: "0x4200000000000000000000000000000000000006" as const
+} as const;
+
+const BASE_SEPOLIA_RPC = "https://sepolia.base.org";
 
 // ABI for ERC20 decimals() and symbol()
 const ERC20_ABI = [{
@@ -52,7 +59,7 @@ Provide:
 - The amount to trade (in human-readable format)
 - The input token address and optional ticker
 - The output token address and optional ticker
-The trade will be routed optimally through Uniswap V3 pools.`,
+The trade will be routed optimally through Uniswap V3 pools using the Universal Router.`,
         schema: TestnetTradeSchema,
     })
     async trade(
@@ -72,7 +79,7 @@ The trade will be routed optimally through Uniswap V3 pools.`,
                 this.getTokenInfo(walletProvider, toAddress, args.toAssetTicker)
             ]);
 
-            // Setup ethers provider for the router
+            // Setup provider
             const provider = new providers.JsonRpcProvider(BASE_SEPOLIA_RPC);
 
             // Create router instance
@@ -86,11 +93,12 @@ The trade will be routed optimally through Uniswap V3 pools.`,
             const currencyAmount = CurrencyAmount.fromRawAmount(fromToken, parsedAmount);
 
             // Setup swap options
-            const swapOptions: SwapOptionsSwapRouter02 = {
+            const swapOptions: SwapOptionsUniversalRouter = {
                 recipient: await walletProvider.getAddress(),
                 slippageTolerance: new Percent(50, 10_000), // 0.5%
-                deadline: Math.floor(Date.now() / 1000 + 1800), // 30 minutes
-                type: SwapType.SWAP_ROUTER_02
+                deadlineOrPreviousBlockhash: Math.floor(Date.now() / 1000 + 1800), // 30 minutes
+                type: SwapType.UNIVERSAL_ROUTER,
+                version: UniversalRouterVersion.V2_0,
             };
 
             // Get the best route
@@ -105,9 +113,9 @@ The trade will be routed optimally through Uniswap V3 pools.`,
                 throw new Error("No route found for this trade");
             }
 
-            // Execute the trade
+            // Execute the trade via Universal Router
             const txHash = await walletProvider.sendTransaction({
-                to: V3_SWAP_ROUTER_ADDRESS as `0x${string}`,
+                to: BASE_SEPOLIA_CONTRACTS.UNIVERSAL_ROUTER,
                 data: route.methodParameters.calldata as `0x${string}`,
                 value: BigInt(route.methodParameters.value)
             });
