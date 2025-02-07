@@ -1,4 +1,3 @@
-// src/actions/customDexTrade.ts
 import { z } from "zod";
 import { ActionProvider, CreateAction, EvmWalletProvider } from "@coinbase/agentkit";
 import type { Network } from "@coinbase/agentkit";
@@ -8,58 +7,44 @@ import { UniversalRouterVersion } from '@uniswap/universal-router-sdk';
 import { providers } from 'ethers';
 import JSBI from 'jsbi';
 
-// Schema matches the original CDP trade interface
 export const TestnetTradeSchema = z
   .object({
     amount: z.string().describe("The amount of the from asset to trade"),
     fromAssetId: z.string().describe("The from asset ID to trade"),
     toAssetId: z.string().describe("The to asset ID to receive from the trade"),
     fromAssetTicker: z.string().optional().describe("The ticker symbol of the from asset"),
-    toAssetTicker: z.string().optional().describe("The ticker symbol of the to asset"),
+    toAssetTicker: z.string().optional().describe("The ticker symbol of the to asset")
   })
-  .strip()
   .describe("Instructions for trading assets on Base Sepolia testnet");
 
-// Base Sepolia Contract Addresses
 const CHAIN_ID = 84532;
 const BASE_SEPOLIA_CONTRACTS = {
     UNIVERSAL_ROUTER: "0x050E797f3625EC8785265e1d9BDd4799b97528A1" as const,
-    V3_FACTORY: "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24" as const,
     QUOTER_V2: "0xC5290058841028F1614F3A6F0F5816cAd0df5E27" as const,
-    PERMIT2: "0x000000000022d473030f116ddee9f6b43ac78ba3" as const,
     WETH9: "0x4200000000000000000000000000000000000006" as const
 } as const;
 
 const BASE_SEPOLIA_RPC = "https://sepolia.base.org";
 
-// ABI for ERC20 decimals() and symbol()
-const ERC20_ABI = [{
-    inputs: [],
-    name: "decimals",
-    outputs: [{ type: "uint8" }],
-    stateMutability: "view",
-    type: "function"
-}, {
-    inputs: [],
-    name: "symbol",
-    outputs: [{ type: "string" }],
-    stateMutability: "view",
-    type: "function"
-}] as const;
+class DexError extends Error {
+    constructor(
+        message: string,
+        public readonly code: 'NO_ROUTE' | 'NO_LIQUIDITY' | 'EXECUTION_ERROR' | 'UNKNOWN' | 'AMOUNT_TOO_SMALL' | 'INSUFFICIENT_BALANCE',
+        public readonly details?: any
+    ) {
+        super(message);
+        this.name = 'DexError';
+    }
+}
 
-class TestnetTradeActionProvider extends ActionProvider<EvmWalletProvider> {
+export class TestnetTradeActionProvider extends ActionProvider<EvmWalletProvider> {
     constructor() {
         super("testnet-trade-provider", []);
     }
 
     @CreateAction({
         name: "testnet_trade",
-        description: `Trade tokens on Base Sepolia testnet using Uniswap V3.
-Provide:
-- The amount to trade (in human-readable format)
-- The input token address and optional ticker
-- The output token address and optional ticker
-The trade will be routed optimally through Uniswap V3 pools using the Universal Router.`,
+        description: "Trade tokens on Base Sepolia testnet using Uniswap V3",
         schema: TestnetTradeSchema,
     })
     async trade(
@@ -68,85 +53,205 @@ The trade will be routed optimally through Uniswap V3 pools using the Universal 
     ): Promise<string> {
         try {
             const { fromAssetId, toAssetId, amount } = args;
-
-            // Convert addresses to checksum format
             const fromAddress = this.normalizeAddress(fromAssetId);
             const toAddress = this.normalizeAddress(toAssetId);
 
-            // Get token information
-            const [fromToken, toToken] = await Promise.all([
-                this.getTokenInfo(walletProvider, fromAddress, args.fromAssetTicker),
-                this.getTokenInfo(walletProvider, toAddress, args.toAssetTicker)
-            ]);
+            // Validate addresses
+            if (!fromAddress || !toAddress) {
+                throw new DexError(
+                    "Invalid token addresses provided",
+                    'UNKNOWN'
+                );
+            }
 
-            // Setup provider
+            console.log(`Preparing to trade ${amount} from ${fromAddress} to ${toAddress}`);
+
             const provider = new providers.JsonRpcProvider(BASE_SEPOLIA_RPC);
-
-            // Create router instance
             const router = new AlphaRouter({
                 chainId: CHAIN_ID,
                 provider,
             });
 
-            // Convert amount to proper format
-            const parsedAmount = JSBI.BigInt(this.parseUnits(amount, fromToken.decimals));
-            const currencyAmount = CurrencyAmount.fromRawAmount(fromToken, parsedAmount);
+            // Create token instances with basic validation
+            try {
+                const [fromToken, toToken] = await Promise.all([
+                    this.createToken(fromAddress, args.fromAssetTicker || "Token A"),
+                    this.createToken(toAddress, args.toAssetTicker || "Token B")
+                ]);
 
-            // Setup swap options
-            const swapOptions: SwapOptionsUniversalRouter = {
-                recipient: await walletProvider.getAddress(),
-                slippageTolerance: new Percent(50, 10_000), // 0.5%
-                deadlineOrPreviousBlockhash: Math.floor(Date.now() / 1000 + 1800), // 30 minutes
-                type: SwapType.UNIVERSAL_ROUTER,
-                version: UniversalRouterVersion.V2_0,
-            };
+                console.log("Tokens validated:");
+                console.log(`From: ${fromToken.symbol} (${fromToken.address})`);
+                console.log(`To: ${toToken.symbol} (${toToken.address})`);
 
-            // Get the best route
+                const parsedAmount = JSBI.BigInt(this.parseUnits(amount, 18));
+                const currencyAmount = CurrencyAmount.fromRawAmount(fromToken, parsedAmount);
+
+                const options: SwapOptionsUniversalRouter = {
+                    recipient: await walletProvider.getAddress(),
+                    slippageTolerance: new Percent(50, 100), // 50% slippage for testing
+                    deadlineOrPreviousBlockhash: Math.floor(Date.now() / 1000 + 1800),
+                    type: SwapType.UNIVERSAL_ROUTER,
+                    version: UniversalRouterVersion.V2_0
+                };
+
+                console.log("Finding best route...");
+                console.log("Checking pool existence and liquidity...");
             const route = await router.route(
-                currencyAmount,
-                toToken,
-                TradeType.EXACT_INPUT,
-                swapOptions
-            );
+                    currencyAmount,
+                    toToken,
+                    TradeType.EXACT_INPUT,
+                    options
+                ).catch((error) => {
+                    console.error("Route finding error:", error);
+                    if (error.message?.includes("no route found")) {
+                        throw new DexError(
+                            "No valid trading route found. This likely means there is no liquidity pool for this pair.",
+                            'NO_ROUTE'
+                        );
+                    }
+                    if (error.message?.includes("insufficient liquidity")) {
+                        throw new DexError(
+                            "Insufficient liquidity in the pool for this trade.",
+                            'NO_LIQUIDITY'
+                        );
+                    }
+                    throw error;
+                });
 
-            if (!route || !route.methodParameters) {
-                throw new Error("No route found for this trade");
+                if (!route || !route.methodParameters || !route.quote) {
+                    throw new DexError(
+                        "Failed to compute a valid trading route",
+                        'NO_ROUTE'
+                    );
+                }
+
+                const firstRoute = route.route[0];
+                if (firstRoute.protocol !== 'V3') {
+                    throw new DexError(
+                        "Only V3 routes are supported",
+                        'NO_ROUTE'
+                    );
+                }
+
+                const poolAddress = firstRoute.poolIdentifiers[0];
+                const poolInfo = firstRoute.route;
+                if (!poolInfo || !poolInfo.pools || poolInfo.pools.length === 0) {
+                    throw new DexError(
+                        "No pool information found",
+                        'NO_ROUTE'
+                    );
+                }
+                
+                const pool = poolInfo.pools[0];
+                
+                console.log("\nPool details:");
+                console.log(`Address: ${poolAddress}`);
+                console.log(`Liquidity: ${pool.liquidity.toString()}`);
+                console.log(`Current tick: ${pool.tickCurrent}`);
+                console.log(`Fee: ${pool.fee / 10000}%`);
+                
+                const quoteAmount = route.quote.toFixed(18);  // Show full precision
+                console.log(`Raw quote amount: ${quoteAmount}`);
+                
+                if (parseFloat(quoteAmount) < 0.000001) {
+                    throw new DexError(
+                        `Quote too small (${quoteAmount}). The minimum tradeable amount might be higher, try increasing the input amount.`,
+                        'AMOUNT_TOO_SMALL'
+                    );
+                }
+
+                console.log(`\nExpected output: ${quoteAmount} ${args.toAssetTicker || "tokens"}`);
+
+                // Check balance before attempting trade
+                const balance = await walletProvider.getBalance();
+                const requiredAmount = fromAddress.toLowerCase() === BASE_SEPOLIA_CONTRACTS.WETH9.toLowerCase() 
+                    ? BigInt(parsedAmount.toString())
+                    : 0n;
+                    
+                if (balance < requiredAmount) {
+                    throw new DexError(
+                        `Insufficient balance. Have ${balance.toString()} wei, need ${requiredAmount.toString()} wei`,
+                        'INSUFFICIENT_BALANCE'
+                    );
+                }
+
+                const value = fromAddress.toLowerCase() === BASE_SEPOLIA_CONTRACTS.WETH9.toLowerCase() 
+                    ? BigInt(parsedAmount.toString())
+                    : 0n;
+
+                const txHash = await walletProvider.sendTransaction({
+                    to: BASE_SEPOLIA_CONTRACTS.UNIVERSAL_ROUTER,
+                    data: route.methodParameters.calldata as `0x${string}`,
+                    value
+                }).catch((error) => {
+                    console.error("Transaction error:", error);
+                    if (error.message?.includes("insufficient funds")) {
+                        throw new DexError(
+                            "Insufficient funds to execute the trade",
+                            'EXECUTION_ERROR'
+                        );
+                    }
+                    throw new DexError(
+                        "Failed to execute the trade",
+                        'EXECUTION_ERROR',
+                        error
+                    );
+                });
+
+                const receipt = await walletProvider.waitForTransactionReceipt(txHash);
+
+                if (receipt.status === "success") {
+                    const expectedOutput = this.formatUnits(route.quote.toString(), 18);
+                    return `Successfully traded ${amount} ${args.fromAssetTicker || "tokens"} for approximately ${expectedOutput} ${args.toAssetTicker || "tokens"}.\nTransaction hash: ${txHash}`;
+                } else {
+                    throw new DexError(
+                        `Transaction failed. Hash: ${txHash}`,
+                        'EXECUTION_ERROR'
+                    );
+                }
+            } catch (error: unknown) {
+                if (error instanceof DexError) {
+                    throw error;
+                }
+                const message = error instanceof Error ? error.message : String(error);
+                throw new DexError(
+                    `Failed to initialize trade: ${message}`,
+                    'UNKNOWN',
+                    error
+                );
             }
-
-            // Execute the trade via Universal Router
-            const txHash = await walletProvider.sendTransaction({
-                to: BASE_SEPOLIA_CONTRACTS.UNIVERSAL_ROUTER,
-                data: route.methodParameters.calldata as `0x${string}`,
-                value: BigInt(route.methodParameters.value)
-            });
-
-            const receipt = await walletProvider.waitForTransactionReceipt(txHash);
-
-            if (receipt.status === "success") {
-                const expectedOutput = this.formatUnits(route.quote.toString(), toToken.decimals);
-                return `Successfully traded ${amount} ${fromToken.symbol} for approximately ${expectedOutput} ${toToken.symbol}.\nTransaction hash: ${txHash}`;
-            } else {
-                return `Transaction failed. Hash: ${txHash}`;
+        } catch (error: unknown) {
+            if (error instanceof DexError) {
+                switch (error.code) {
+                    case 'NO_ROUTE':
+                        return `Trade failed: No valid trading route found. This usually means there is no liquidity pool available for this token pair.`;
+                    case 'NO_LIQUIDITY':
+                        return `Trade failed: The pool exists but has insufficient liquidity for this trade.`;
+                    case 'AMOUNT_TOO_SMALL':
+                        return `Trade failed: ${error.message}`;
+                    case 'INSUFFICIENT_BALANCE':
+                        return `Trade failed: ${error.message}`;
+                    case 'EXECUTION_ERROR':
+                        return `Trade failed during execution: ${error.message}`;
+                    default:
+                        return `Trade failed with an unknown error: ${error.message}`;
+                }
             }
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-            return `Error trading assets: ${errorMessage}`;
+            const message = error instanceof Error ? error.message : String(error);
+            return `Unexpected error during trade: ${message}`;
         }
     }
 
-    // Helper function to normalize addresses
     private normalizeAddress(address: string): `0x${string}` {
         return address.toLowerCase() as `0x${string}`;
     }
 
-    // Helper function to parse units
     private parseUnits(value: string, decimals: number): string {
         const [whole, fraction = ''] = value.split('.');
         const paddedFraction = fraction.padEnd(decimals, '0');
         return `${whole}${paddedFraction}`;
     }
 
-    // Helper function to format units
     private formatUnits(value: string, decimals: number): string {
         if (value.length <= decimals) {
             value = value.padStart(decimals + 1, '0');
@@ -156,45 +261,17 @@ The trade will be routed optimally through Uniswap V3 pools using the Universal 
         return fraction ? `${whole}.${fraction}` : whole;
     }
 
-    // Get complete token information
-    private async getTokenInfo(
-        walletProvider: EvmWalletProvider, 
-        tokenAddress: `0x${string}`,
-        providedSymbol?: string
-    ): Promise<Token> {
-        // Get decimals
-        const decimals = await walletProvider.readContract({
-            address: tokenAddress,
-            abi: ERC20_ABI,
-            functionName: "decimals"
-        }) as number;
-
-        // Get symbol if not provided
-        let symbol = providedSymbol;
-        if (!symbol) {
-            try {
-                symbol = await walletProvider.readContract({
-                    address: tokenAddress,
-                    abi: ERC20_ABI,
-                    functionName: "symbol"
-                }) as string;
-            } catch {
-                symbol = tokenAddress.slice(2, 8);
-            }
-        }
-
+    private async createToken(address: string, symbol: string): Promise<Token> {
         return new Token(
             CHAIN_ID,
-            tokenAddress,
-            decimals,
+            address as `0x${string}`,
+            18,  // Using 18 decimals as default for testing
             symbol,
             symbol
         );
     }
 
-    // Support all networks for testing
     supportsNetwork = (_: Network): boolean => true;
 }
 
-// Export the provider factory function
 export const testnetTradeActionProvider = () => new TestnetTradeActionProvider();
