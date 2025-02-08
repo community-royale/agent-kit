@@ -98,7 +98,7 @@ import {
         actionProviders: [
           wethActionProvider(),
           pythActionProvider(),
-//        walletActionProvider(),
+          walletActionProvider(),
           erc20ActionProvider(),
           cdpApiActionProvider({
             apiKeyName: process.env.CDP_API_KEY_NAME,

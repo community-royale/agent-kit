@@ -1,0 +1,10 @@
+JTK contract 0x258C99F2B71629C1Dd555bfFd7EA837Be5552a49 
+
+MTK contract 0x43C6cbD925a6e2cA502fD858865Ab64d6e0277CD
+
+These are two custom contracts for ERC20 tokens, I have created a pool of 500 and 500 each
+
+I have 500 of each too
+
+
+use this to test
