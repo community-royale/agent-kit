@@ -6,6 +6,7 @@
     "license": "Apache-2.0",
     "scripts": {
         "start": "NODE_OPTIONS='--no-warnings' ts-node ./src/chatbot.ts",
+        "start:server": "ts-node ./src/server.ts",
         "dev": "nodemon ./src/chatbot.ts",
         "build": "tsc",
         "lint": "eslint -c .eslintrc.json *.ts",
@@ -22,12 +23,17 @@
         "@uniswap/sdk-core": "^7.5.0",
         "@uniswap/smart-order-router": "^4.17.9",
         "@uniswap/v3-sdk": "^3.24.0",
+        "cors": "^2.8.5",
         "dotenv": "^16.4.5",
         "ethers": "^5.7.2",
+        "express": "^4.21.2",
         "viem": "^2.22.21",
         "zod": "^3.22.4"
     },
     "devDependencies": {
+        "@types/cors": "^2.8.17",
+        "@types/express": "^5.0.0",
+        "@types/node": "^22.13.1",
         "nodemon": "^3.1.0",
         "ts-node": "^10.9.2",
         "typescript": "^5.0.0"

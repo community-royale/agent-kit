@@ -216,3 +216,5 @@ import {
       process.exit(1);
     });
   }
+
+  export { initializeAgent };
