@@ -107,7 +107,6 @@ import {
             apiKeyName: process.env.CDP_API_KEY_NAME,
             apiKeyPrivateKey: process.env.CDP_API_KEY_PRIVATE_KEY?.replace(/\\n/g, "\n"),
           }),
-          testnetTradeActionProvider(), // Add this line
         ],
       });
   
