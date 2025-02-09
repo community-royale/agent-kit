@@ -8,7 +8,6 @@ import {
     cdpWalletActionProvider,
     pythActionProvider,
   } from "@coinbase/agentkit";
-  import { testnetTradeActionProvider } from "./actions/customDexTrade";
   import { getLangChainTools } from "@coinbase/agentkit-langchain";
   import { HumanMessage } from "@langchain/core/messages";
   import { MemorySaver } from "@langchain/langgraph";
@@ -133,10 +132,7 @@ import {
           encourage them to implement it themselves using the CDP SDK + Agentkit, recommend they go to 
           docs.cdp.coinbase.com for more information. Be concise and helpful with your responses. Refrain from 
           restating your tools' descriptions unless it is explicitly requested.
-`
-          // TOKEN ADDRESS FOR WBTC 0x78F942F8F9110067c08183183c45903e5Dc2763A
-          
-          // TOKEN ADDRESS FOR USDT 0x9571566D7ECb2fc899477bF295248a20FF4Adb61
+          `
           ,
       });
   
